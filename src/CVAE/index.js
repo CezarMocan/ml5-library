@@ -12,6 +12,8 @@
 import * as tf from '@tensorflow/tfjs';
 import callCallback from '../utils/callcallback';
 
+const sleep = async (ms) => new Promise(res => setTimeout(res, ms))
+
 class Cvae {
   /**
    * Create a Conditional Variational Autoencoder (CVAE).
@@ -25,6 +27,7 @@ class Cvae {
      * @public
      */
     this.ready = false;
+    console.log('CVAE model constructor')
     this.model = {};
     this.latentDim = tf.randomUniform([1, 16]);
     this.modelPath = modelPath;
@@ -55,6 +58,51 @@ class Cvae {
     return callCallback(this.generateInternal(label), callback);
   }
 
+  async interpolate(label, frameCallback) {
+    // this.latentDim.print()
+    const cursor = this.labels.indexOf(label);
+    if (cursor < 0) {
+      console.log('Wrong input of the label!');
+      return [undefined, undefined]; // invalid input just return;
+    }
+
+    this.labelVector = this.labelVector.map(() => 0); // clear vector
+    this.labelVector[cursor+1] = 1;
+    // console.log('Label vector: ', this.labelVector)
+    // input.print()
+
+    const latentDim = tf.randomUniform([1, 16]);
+
+    const noFrames = 100
+
+    for (let i = 0; i < noFrames; i += 1) {
+      const input = tf.tensor([this.labelVector]);
+      const frame = await this.interpolateInternal(input, latentDim)
+
+      frameCallback(null, frame)
+      await sleep(50)
+
+      this.labelVector[cursor+1] -= 1.0 / noFrames
+      this.labelVector[cursor+2] += 1.0 / noFrames
+
+      // const toAdd = tf.randomUniform([1, 16]).sub(latentDim).mul(tf.scalar(0.2));  
+      // latentDim = latentDim.add(toAdd)
+    }
+    return null
+  }
+
+  async animate(label, frameCallback) {
+    let latentDim = tf.randomUniform([1, 16]);
+    for (let i = 0; i < 100; i += 1) {
+      const frame = await this.generateInternal(label, latentDim)
+      frameCallback(null, frame)
+      await sleep(50)
+      const toAdd = tf.randomUniform([1, 16]).sub(latentDim).mul(tf.scalar(0.2));  
+      latentDim = latentDim.add(toAdd)
+    }
+    return null
+  }
+
   loadAsync(url){
     return new Promise((resolve, reject) => {
         if(!this.ready) reject();
@@ -80,29 +128,10 @@ class Cvae {
     return false;
   }
 
-  async generateInternal(label) {
-    const res = tf.tidy(() => {
-      this.latentDim = tf.randomUniform([1, 16]);
-      const cursor = this.labels.indexOf(label);
-      if (cursor < 0) {
-        console.log('Wrong input of the label!');
-        return [undefined, undefined]; // invalid input just return;
-      }
-
-      this.labelVector = this.labelVector.map(() => 0); // clear vector
-      this.labelVector[cursor+1] = 1;
-
-      const input = tf.tensor([this.labelVector]);
-
-      const temp = this.model.predict([this.latentDim, input]);
-      return temp.reshape([temp.shape[1], temp.shape[2], temp.shape[3]]);
-    });
-
-    const raws = await tf.browser.toPixels(res);
-
+  async createImageSrc(raws, shape) {
     const canvas = document.createElement('canvas'); // consider using offScreneCanvas
     const ctx = canvas.getContext('2d');
-    const [x, y] = res.shape;
+    const [x, y] = shape;
     canvas.width = x;
     canvas.height = y;
     const imgData = ctx.createImageData(x, y);
@@ -111,6 +140,57 @@ class Cvae {
     ctx.putImageData(imgData, 0, 0);
 
     const src = URL.createObjectURL(await this.getBlob(canvas));
+    return src
+  }
+
+  async interpolateInternal(input, latentDim) {
+    const res = tf.tidy(() => {
+      if (latentDim) {
+        this.latentDim = latentDim;
+      } else {
+        this.latentDim = tf.randomUniform([1, 16]);
+      }
+
+      const temp = this.model.predict([this.latentDim, input]);
+      return temp.reshape([temp.shape[1], temp.shape[2], temp.shape[3]]);
+    });
+
+    const raws = await tf.browser.toPixels(res);
+    const src = await this.createImageSrc(raws, res.shape)
+    let image;
+    /* global loadImage */
+    if (this.checkP5()) image = await this.loadAsync(src); 
+    return { src, raws, image };
+  }
+
+  async generateInternal(label, latentDim) {
+    const res = tf.tidy(() => {
+      if (latentDim) {
+        this.latentDim = latentDim;
+      } else {
+        this.latentDim = tf.randomUniform([1, 16]);
+      }
+      // this.latentDim.print()
+      const cursor = this.labels.indexOf(label);
+      if (cursor < 0) {
+        console.log('Wrong input of the label!');
+        return [undefined, undefined]; // invalid input just return;
+      }
+
+      this.labelVector = this.labelVector.map(() => 0); // clear vector
+      this.labelVector[cursor+1] = 1;
+      // this.labelVector[cursor+2] = 0.5;
+
+      const input = tf.tensor([this.labelVector]);
+      // console.log('Label vector: ', this.labelVector)
+      // input.print()
+
+      const temp = this.model.predict([this.latentDim, input]);
+      return temp.reshape([temp.shape[1], temp.shape[2], temp.shape[3]]);
+    });
+
+    const raws = await tf.browser.toPixels(res);
+    const src = await this.createImageSrc(raws, res.shape)
     let image;
     /* global loadImage */
     if (this.checkP5()) image = await this.loadAsync(src); 
